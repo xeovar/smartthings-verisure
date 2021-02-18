@@ -68,6 +68,8 @@ preferences {
     page(name: "setupPage")
 }
 
+import java.text.SimpleDateFormat; 
+import groovy.xml.*;
 include 'asynchttp_v1'
 
 def setupPage() {
@@ -80,18 +82,18 @@ def setupPage() {
         section("Authentication") {
             input "username", "text", title: "Username"
             input "password", "password", title: "Password"
+            input "country", "text", title: "Country (ES, IT, FR, GB, PT)"
+        }
+
+        section("Verisure installation number") {
+            paragraph "Your installation number from the contract/website/app"
+            input "installationNumber", "number", title: "Installation number"
         }
 
         section("Set modes when alarm changes state") {
             input "disarmedMode", "mode", title: "Mode for unarmed", multiple: false, required: false
             input "armedMode", "mode", title: "Mode for armed", multiple: false, required: false
             input "armedHomeMode", "mode", title: "Mode for armed home", multiple: false, required: false
-        }
-
-        section("Verisure installation") {
-            paragraph "WARNING: Untested territory"
-            paragraph "IF you have multiple sites, you can change which installation to use. If you only have one installation the correct number is 0, and is the default for everyone. To choose the second installation enter 1."
-            input "installationNumber", "number", "title": "Installation number", defaultValue: 0
         }
 
         section("Remote logging? (Works with Splunk)") {
@@ -135,9 +137,10 @@ def initialize() {
 // --- Getters
 
 def getBaseUrl() {
-    if (state.serverUrl == null) {
-        switchBaseUrl()
-    }
+ //   if (state.serverUrl == null) {
+ //       switchBaseUrl()
+ //   }
+    state.serverUrl = "https://mob2217.securitasdirect.es:12010/WebService/ws.do" 
     return state.serverUrl
 }
 
@@ -164,14 +167,15 @@ def getAlarmState() {
 def resetState() {
     state.sessionCookie = null
     state.sessionCookieTime = null
-    state.installationId = null
+    state.installationId = installationNumber
+    state.sessionID = null
 }
 
 def checkPeriodically() {
     debug("transaction", " ===== START_UPDATE")
 
     // Handling some parameter setup, copying from settings to enable programmatically changing them
-    state.app_version = "0.6.3"
+    state.app_version = "0.7.0"
     state.remoteLogEnabled = remoteLogEnabled
     state.logUrl = logUrl
     state.logToken = logToken
@@ -209,16 +213,25 @@ def checkPeriodically() {
 def loginAndUpdateStates() {
     debug("loginAndUpdateStates", "Doing login")
 
-    def loginUrl = getBaseUrl() + "/cookie"
-
-    def authString = "Basic " + ("CPE/" + username + ":" + password).bytes.encodeBase64()
-
+    def loginUrl = getBaseUrl()
+    
+    SimpleDateFormat format = new SimpleDateFormat("yyyyMMddHHmmss");
+    
+    def TempDate = new Date()
+    state.timestamp = format.format(TempDate)
+    state.sessionID = "AND_________________________vericlient"+state.timestamp
+    
     def params = [
             uri        : loginUrl,
-            headers    : [
-                    Authorization: authString
+            query    : [
+                    request : "LOGIN",
+                    ID : state.sessionID,
+                    Country : country,
+                    user : username,
+                    pwd : password
             ],
-            contentType: "application/json"
+            contentType: "application/xml",
+            requiredcontentType: "text/xml"
     ]
 
     asynchttp_v1.post('handleLoginResponse', params)
@@ -227,26 +240,41 @@ def loginAndUpdateStates() {
 
 def fetchStatusFromServer(sessionCookie, installationId) {
     debug("fetchStatusFromServer", "Fetching overview")
-
-    fetchResourceFromServer("overview", sessionCookie, installationId, "handleOverviewResponse")
-}
-
-def fetchInstallationId(sessionCookie) {
-    debug("fetchInstallationId", "Finding installation")
+    
     def params = [
-            uri        : getBaseUrl() + "/installation/search?email=" + URLEncoder.encode(username),
-            contentType: "application/json",
-            headers    : [
-                    Cookie: "vid=" + sessionCookie
-            ]
+            uri        : getBaseUrl(),
+            query    : [
+                    request : "MYINSTALLATION",
+                    ID : state.sessionID,
+                    Country : country,
+                    hash : state.sessionCookie,
+                    numinst : state.installationID
+            ],
+            contentType: "application/xml",
+            requiredcontentType: "text/xml"
     ]
 
-    httpGet(params) { response ->
-        def installationId = response.data[installationNumber]["giid"]
-        debug("fetchInstallationId", "Found installation id.")
-        return installationId
-    }
+    asynchttp_v1.post('handleOverviewResponse', params)
+    
+    //fetchResourceFromServer("overview", sessionCookie, installationId, "handleOverviewResponse")
 }
+
+//def fetchInstallationId(sessionCookie) { 
+//    debug("fetchInstallationId", "Finding installation")
+//    def params = [
+//            uri        : getBaseUrl() + "/installation/search?email=" + URLEncoder.encode(username),
+//            contentType: "application/json",
+//            headers    : [
+//                    Cookie: "vid=" + sessionCookie
+//            ]
+//    ]
+//
+//    httpGet(params) { response ->
+//        def installationId = response.data[installationNumber]["giid"]
+//        debug("fetchInstallationId", "Found installation id.")
+//        return installationId
+//    }
+//}
 
 // --- Response handlers for async http
 
@@ -254,15 +282,19 @@ def handleLoginResponse(response, data) {
     debug("handleLoginResponse", "Response for login received")
 
     if (!checkResponse("handleLoginResponse", response)) return
-
-    def sessionCookie = response.json["cookie"]
+	debug("handleLoginResponse", "Response received.")
+    
+    def tempxml = response.data
+    debug("handleLoginResponse",tempxml) 
+    def list = new XmlSlurper().parseText(tempxml)
     debug("handleLoginResponse", "Session cookie received.")
-
-    state.sessionCookie = sessionCookie
+	debug("handleLoginResponse", XmlUtil.serialize(list))
+    def tempsessionCookie = list.'*'.find { node -> node.name()=='HASH'}
+    state.sessionCookie = tempsessionCookie
+    debug("handleLoginResponse", "$tempsessionCookie")
     state.sessionCookieTime = new Date()
-    state.installationId = fetchInstallationId(sessionCookie)
-
-    fetchStatusFromServer(sessionCookie, state.installationId)
+    debug("handleLoginResponse", "Session cookie $state.sessionCookie from $state.sessionCookieTime at $state.sessionID")
+    fetchStatusFromServer(state.sessionCookie, state.installationId) //TO DO
 }
 
 def checkResponse(context, response) {
@@ -289,17 +321,111 @@ def handleOverviewResponse(response, data) {
     debug("handleOverviewResponse", "Overview response received. ")
 
     if (!checkResponse("handleOverviewResponse", response)) return
+    
+    debug("fetchStatusFromServer", "Fetching alarm state")
+    
+    def params = [
+            uri        : getBaseUrl(),
+            query    : [
+                    request : "EST1",
+                    ID : state.sessionID,
+                    Country : country,
+                    user : username,
+                    hash : state.sessionCookie,
+                    numinst : state.installationID,
+                    panel : 'SDVFAST',
+                    callby : 'XEO_99'
+            ],
+            contentType: "application/xml",
+            requiredcontentType: "text/xml"
+    ]
 
-    parseAlarmState(response.json["armState"])
-    parseSensorResponse(response.json["climateValues"])
-    parseContactSensorResponse(response.json["doorWindow"])
-    parseDoorLockStatusResponse(response.json["doorLockStatusList"])
+    asynchttp_v1.post('handleAlarmEST1Response', params)
 
-    // TODO:
+	// TODO: loop through devices and trigger status checks for all of them
+    
+    //parseSensorResponse(response.json["climateValues"])
+    //parseContactSensorResponse(response.json["doorWindow"])
+    //parseDoorLockStatusResponse(response.json["doorLockStatusList"])
+
     // parseSmartPlugsResponse(response.json["smartPlugs"])
     // parseHeatPumpsResponse(response.json["heatPumps"])
     debug("handleOverviewResponse", "Overview response handled")
-    debug("transaction", " ===== END_UPDATE")
+}
+
+def handleAlarmEST2Response(response, data) {
+    debug("handleAlarmEST2Response", "EST2 response received. ")
+
+    if (!checkResponse("handleAlarmEST2Response", response)) return
+    
+    debug("handleAlarmEST2Response", "Updating alarm device")
+    
+    def tempxml = response.data
+    debug("handleAlarmEST2Response",tempxml) 
+    def list = new XmlSlurper().parseText(tempxml)
+    debug("handleAlarmEST2Response", XmlUtil.serialize(list))
+    def tempAlarmStateID = list.'*'.find { node -> node.name()=='STATUS'}
+    debug("handleAlarmEST2Response", "$tempAlarmStateID")
+    def tempAlarmState = null
+    switch(tempAlarmStateID) {
+    	case 0 : tempAlarmState = "DISARMED";
+        case 1 : tempAlarmState = "ARMED_AWAY";
+        case 2 : tempAlarmState = "ARMED_HOME";
+    }    
+    debug("handleAlarmEST2Response", "New alarm state: $tempAlarmState")
+  
+    if (state.previousAlarmState == null) {
+        state.previousAlarmState = tempAlarmState
+    }
+    
+    //Add & update main alarm
+    if (!hasChildDevice('verisure-alarm')) {
+        debug("alarmDevice.created", alarmDevice)
+        addChildDevice(app.namespace, "Verisure Alarm", "verisure-alarm", null, [status: tempAlarmState])
+    } else {
+        def alarmDevice = getChildDevice('verisure-alarm')
+
+        debug("alarmDevice.updated", alarmDevice.getDisplayName() + " | Status: " + tempAlarmState, false)
+        alarmDevice.sendEvent(name: "status", value: tempAlarmState)
+        //alarmDevice.sendEvent(name: "loggedBy", value: alarmState.name)
+        //alarmDevice.sendEvent(name: "loggedWhen", value: alarmState.date)
+        //alarmDevice.sendEvent(name: "lastUpdate", value: new Date())
+    }
+
+    if (tempAlarmState != state.previousAlarmState) {
+        debug("handleAlarmEST2Response", "Alarm state changed to ${tempAlarmState}, changing mode")
+        state.previousAlarmState = tempAlarmState
+        changeMode(tempAlarmState)
+    } else {
+        debug("handleAlarmEST2Response", "State not changed. Not triggering mode changes. Previous: ${state.previousAlarmState}, Current: ${tempAlarmState}.")
+    }
+    
+	debug("handleAlarmEST2Response", "Alarm state processed")
+}
+
+def handleAlarmEST1Response(response, data) {
+    debug("handleAlarmEST1Response", "EST1 response received. ")
+
+    if (!checkResponse("handleAlarmEST1Response", response)) return
+
+	def params = [
+            uri        : getBaseUrl(),
+            query    : [
+                    request : "EST2",
+                    ID : state.sessionID,
+                    Country : country,
+                    hash : state.sessionCookie,
+                    numinst : state.installationID,
+                    panel : 'SDVFAST',
+                    callby : 'XEO_99'
+            ],
+            contentType: "application/xml",
+            requiredcontentType: "text/xml"
+    ]
+
+    asynchttp_v1.post('handleAlarmEST2Response', params)
+    
+	debug("handleAlarmEST1Response", "EST2 request sent")
 }
 
 // --- Parse responses to Smartthings objects
@@ -387,34 +513,34 @@ def parseDoorLockStatusResponse(doorLockStatus) {
 }
 
 
-def parseAlarmState(alarmState) {
-    if (state.previousAlarmState == null) {
-        state.previousAlarmState = alarmState.statusType
-    }
-
-    debug("handleAlarmResponse", "Updating alarm device")
-    //Add & update main alarm
-    if (!hasChildDevice('verisure-alarm')) {
-        debug("alarmDevice.created", alarmDevice)
-        addChildDevice(app.namespace, "Verisure Alarm", "verisure-alarm", null, [status: alarmState.statusType, loggedBy: alarmState.name, loggedWhen: alarmState.date])
-    } else {
-        def alarmDevice = getChildDevice('verisure-alarm')
-
-        debug("alarmDevice.updated", alarmDevice.getDisplayName() + " | Status: " + alarmState.statusType + " | LoggedBy: " + alarmState.name + " | LoggedWhen: " + alarmState.date, false)
-        alarmDevice.sendEvent(name: "status", value: alarmState.statusType)
-        alarmDevice.sendEvent(name: "loggedBy", value: alarmState.name)
-        alarmDevice.sendEvent(name: "loggedWhen", value: alarmState.date)
-        alarmDevice.sendEvent(name: "lastUpdate", value: new Date())
-    }
-
-    if (alarmState.statusType != state.previousAlarmState) {
-        debug("updateAlarmState", "Alarm state changed to ${alarmState.statusType}, changing mode")
-        state.previousAlarmState = alarmState.statusType
-        changeMode(alarmState.statusType)
-    } else {
-        debug("updateAlarmState", "State not changed. Not triggering mode changes. Previous: ${state.previousAlarmState}, Current: ${alarmState.statusType}.")
-    }
-}
+//def parseAlarmState(alarmState) {
+//    if (state.previousAlarmState == null) {
+//        state.previousAlarmState = alarmState.statusType
+//    }
+//
+//    debug("handleAlarmResponse", "Updating alarm device")
+//    //Add & update main alarm
+//    if (!hasChildDevice('verisure-alarm')) {
+//        debug("alarmDevice.created", alarmDevice)
+//        addChildDevice(app.namespace, "Verisure Alarm", "verisure-alarm", null, [status: alarmState.statusType, loggedBy: alarmState.name, loggedWhen: alarmState.date])
+//   } else {
+//        def alarmDevice = getChildDevice('verisure-alarm')
+//
+//        debug("alarmDevice.updated", alarmDevice.getDisplayName() + " | Status: " + alarmState.statusType + " | LoggedBy: " + alarmState.name + " | LoggedWhen: " + alarmState.date, false)
+//        alarmDevice.sendEvent(name: "status", value: alarmState.statusType)
+//        alarmDevice.sendEvent(name: "loggedBy", value: alarmState.name)
+//        alarmDevice.sendEvent(name: "loggedWhen", value: alarmState.date)
+//        alarmDevice.sendEvent(name: "lastUpdate", value: new Date())
+//    }
+//
+//    if (alarmState.statusType != state.previousAlarmState) {
+//        debug("updateAlarmState", "Alarm state changed to ${alarmState.statusType}, changing mode")
+//        state.previousAlarmState = alarmState.statusType
+//        changeMode(alarmState.statusType)
+//    } else {
+//        debug("updateAlarmState", "State not changed. Not triggering mode changes. Previous: ${state.previousAlarmState}, Current: ${alarmState.statusType}.")
+//    }
+//}
 
 // -- Helper methods
 
