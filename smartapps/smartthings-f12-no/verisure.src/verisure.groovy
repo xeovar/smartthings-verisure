@@ -109,6 +109,8 @@ def setupPage() {
 // --- Smartthings lifecycle
 
 def installed() {
+    unschedule()
+    resetState()
     initialize()
 }
 
@@ -169,6 +171,7 @@ def resetState() {
     state.sessionCookieTime = null
     state.installationId = installationNumber
     state.sessionID = null
+    state.previousAlarmState = null
 }
 
 def checkPeriodically() {
@@ -197,7 +200,9 @@ def checkPeriodically() {
             resetState()
         }
     }
-
+	
+    debug("checkPeriodically", "Session cookie: $state.sessionCookie and installation id: $state.installationId")
+    
     if (state.sessionCookie == null || state.installationId == null) {
         try {
             loginAndUpdateStates()
@@ -206,7 +211,7 @@ def checkPeriodically() {
         }
     } else {
         debug("checkPeriodically", "Session cookie already initialised. Time of initialisation: ${state.sessionCookieTime}")
-        fetchStatusFromServer(state.sessionCookie, state.installationId)
+        //fetchStatusFromServer(state.sessionCookie, state.installationId)
     }
 }
 
@@ -294,7 +299,7 @@ def handleLoginResponse(response, data) {
     debug("handleLoginResponse", "$tempsessionCookie")
     state.sessionCookieTime = new Date()
     debug("handleLoginResponse", "Session cookie $state.sessionCookie from $state.sessionCookieTime at $state.sessionID")
-    fetchStatusFromServer(state.sessionCookie, state.installationId) //TO DO
+    //fetchStatusFromServer(state.sessionCookie, state.installationId) //TO DO
 }
 
 def checkResponse(context, response) {
@@ -322,7 +327,7 @@ def handleOverviewResponse(response, data) {
 
     if (!checkResponse("handleOverviewResponse", response)) return
     
-    debug("fetchStatusFromServer", "Fetching alarm state")
+    debug("handleOverviewResponse", "Fetching alarm state")
     
     def params = [
             uri        : getBaseUrl(),
@@ -340,7 +345,8 @@ def handleOverviewResponse(response, data) {
             requiredcontentType: "text/xml"
     ]
 
-    asynchttp_v1.post('handleAlarmEST1Response', params)
+	debug("handleOverviewResponse","Requesting: $params")
+    asynchttp_v1.get('handleAlarmEST1Response', params)
 
 	// TODO: loop through devices and trigger status checks for all of them
     
@@ -422,8 +428,10 @@ def handleAlarmEST1Response(response, data) {
             contentType: "application/xml",
             requiredcontentType: "text/xml"
     ]
+    
+    debug("handleAlarmEST1Response","Requesting: $params")
 
-    asynchttp_v1.post('handleAlarmEST2Response', params)
+    asynchttp_v1.get('handleAlarmEST2Response', params)
     
 	debug("handleAlarmEST1Response", "EST2 request sent")
 }
