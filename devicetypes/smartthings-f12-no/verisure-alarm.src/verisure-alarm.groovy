@@ -27,9 +27,9 @@ metadata {
             namespace: "smartthings.f12.no") {
         capability "Sensor"
         attribute "status", "string"
-        attribute "loggedBy", "string"
-        attribute "loggedWhen", "string"
-        attribute "lastUpdate", "string"
+//        attribute "loggedBy", "string"
+//        attribute "loggedWhen", "string"
+//        attribute "lastUpdate", "string"
     }
 
     simulator {}
@@ -40,29 +40,19 @@ metadata {
             state "ARMED_AWAY", label: 'Armed', backgroundColor: "#c36cd1", icon: "st.Home.home3"
             state "ARMED_HOME", label: 'Armed Home', backgroundColor: "#c36cd1", icon: "st.Home.home2"
         }
-        valueTile("nameTile", "device.loggedBy", decoration: "flat", height: 2, width: 6, inactiveLabel: false) {
-            state "loggedBy", label: 'By: ${currentValue}'
-        }
-        valueTile("dateTile", "device.loggedWhen", decoration: "flat", height: 2, width: 6, inactiveLabel: false) {
-            state "loggedWhen", label: 'Time: ${currentValue}'
-        }
-        valueTile("updateTile", "device.lastUpdate", decoration: "flat", height: 2, width: 6, inactiveLabel: false) {
-            state "lastUpdate", label: 'Updated: ${currentValue}'
-        }
         main("alarmTile")
-        details(["alarmTile", "nameTile", "dateTile", "updateTile"])
+        details(["alarmTile"])
     }
 }
 
 def parse(String description) {
     log.debug("[alarm.status] " + device.status)
-    log.debug("[alarm.loggedBy] " + device.loggedBy)
-    log.debug("[alarm.loggedWhen] " + device.loggedWhen)
+//    log.debug("[alarm.loggedBy] " + device.loggedBy)
+//    log.debug("[alarm.loggedWhen] " + device.loggedWhen)
 
     def evnt01 = createEvent(name: "status", value: device.status)
-    def evnt02 = createEvent(name: "loggedBy", value: device.loggedBy)
-    def evnt03 = createEvent(name: "loggedWhen", value: device.loggedWhen)
+ //   def evnt02 = createEvent(name: "loggedBy", value: device.loggedBy)
+ //   def evnt03 = createEvent(name: "loggedWhen", value: device.loggedWhen)
 
-    return [evnt01, evnt02, evnt03]
+    return [evnt01] //, evnt02, evnt03]
 }
-
